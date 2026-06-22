@@ -1,0 +1,131 @@
+# =============================================================================
+# AuraGate — Docker Compose Infrastructure Manifest
+# =============================================================================
+# Purpose:
+#   Defines the foundational data-layer services (PostgreSQL, Redis) for the
+#   AuraGate Enterprise AI Gateway. All application services in later phases
+#   will join the `auragate_net` bridge network defined here.
+#
+# Usage:
+#   cp .env.example .env   # First-time setup
+#   make up                # Start services
+#   make health            # Verify readiness
+#
+# Interactions:
+#   - Phase 2 (Prisma/SQL migrations) connects to `postgres` on port 5432.
+#   - Phase 3 (Rate limiter, cache) connects to `redis` on port 6379.
+#   - Phase 4 (Proxy engine) depends on both services being `healthy`.
+#   - Phase 5 (BullMQ worker) uses `redis` as its job queue backend.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 15 — Relational Analytical Ledger & Budget Enforcer
+  # ---------------------------------------------------------------------------
+  # Serves as the durable storage layer for:
+  #   - Tenant configuration and budget tracking
+  #   - API key registry (hashed)
+  #   - Time-partitioned usage logs (Phase 2)
+  #
+  # The health check uses pg_isready over TCP (127.0.0.1) rather than Unix
+  # sockets to ensure the check validates actual network readiness — the same
+  # path that application services will use to connect.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: auragate_postgres
+    platform: linux/arm64
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - auragate_pgdata:/var/lib/postgresql/data
+    networks:
+      - auragate_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — In-Memory Cache, Rate Limiter & Job Queue Backend
+  # ---------------------------------------------------------------------------
+  # Serves as the high-speed data plane for:
+  #   - Sliding window rate limiting via Lua scripts (Phase 3)
+  #   - Prompt-level response caching with TTL (Phase 3)
+  #   - BullMQ job queue persistence (Phase 5)
+  #
+  # Persistence: AOF (Append Only File) with `everysec` fsync policy.
+  #   - Guarantees at most 1 second of data loss on crash.
+  #   - RDB snapshots are disabled (`--save ""`) to avoid redundant I/O.
+  #
+  # Security: AUTH is enforced via `--requirepass`. The `--no-auth-warning`
+  # flag in the health check suppresses the CLI security warning that would
+  # otherwise pollute Docker health check logs.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: auragate_redis
+    platform: linux/arm64
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --save ""
+      --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - auragate_redis_data:/data
+    networks:
+      - auragate_net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} --no-auth-warning ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# =============================================================================
+# Named Volumes — Persistent Storage
+# =============================================================================
+# Named volumes are managed by Docker and survive container removal.
+# Data is only destroyed on explicit `docker volume rm` or `make destroy`.
+# =============================================================================
+volumes:
+  auragate_pgdata:
+    driver: local
+  auragate_redis_data:
+    driver: local
+
+# =============================================================================
+# Networks — Service Isolation
+# =============================================================================
+# All AuraGate services communicate over this isolated bridge network.
+# Services resolve each other by name (e.g., `postgres`, `redis`).
+# Future services (Next.js app, BullMQ worker) will join this network.
+# =============================================================================
+networks:
+  auragate_net:
+    driver: bridge
