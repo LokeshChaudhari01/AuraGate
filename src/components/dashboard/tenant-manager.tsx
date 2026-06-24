@@ -7,13 +7,13 @@ export function TenantManager() {
   const { data: tenants, mutate, isLoading } = useTenants();
   const [name, setName] = useState("");
   const [budgetUsd, setBudgetUsd] = useState("");
-  const [creating, setCreating] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !budgetUsd) return;
 
-    setCreating(true);
+    setIsCreating(true);
     try {
       await fetch("/api/admin/tenants", {
         method: "POST",
@@ -26,7 +26,7 @@ export function TenantManager() {
     } catch (err) {
       console.error("Failed to create tenant", err);
     } finally {
-      setCreating(false);
+      setIsCreating(false);
     }
   };
 
@@ -47,6 +47,8 @@ export function TenantManager() {
   if (isLoading) {
     return <div className="animate-pulse h-64 bg-zinc-900 rounded-xl"></div>;
   }
+
+  const safeTenants = Array.isArray(tenants) ? tenants : [];
 
   return (
     <div className="space-y-6">
@@ -70,10 +72,10 @@ export function TenantManager() {
           />
           <button
             type="submit"
-            disabled={creating || !name || !budgetUsd}
+            disabled={isCreating || !name || !budgetUsd}
             className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50"
           >
-            {creating ? "Creating..." : "Create"}
+            {isCreating ? "Creating..." : "Create"}
           </button>
         </form>
       </div>
@@ -95,16 +97,16 @@ export function TenantManager() {
               </tr>
             </thead>
             <tbody>
-              {tenants?.map((t: any) => (
-                <tr key={t.id} className="border-b border-zinc-800 hover:bg-zinc-800/50 transition-colors">
-                  <td className="px-6 py-4 font-mono text-xs">{t.id}</td>
-                  <td className="px-6 py-4 font-medium text-zinc-200">{t.name}</td>
-                  <td className="px-6 py-4">${Number(t.budgetUsd).toFixed(2)}</td>
-                  <td className="px-6 py-4">{t.keyCount}</td>
-                  <td className="px-6 py-4">{new Date(t.createdAt).toLocaleDateString()}</td>
+              {safeTenants.map((tenant: any) => (
+                <tr key={tenant.id} className="border-b border-zinc-800 hover:bg-zinc-800/50 transition-colors">
+                  <td className="px-6 py-4 font-mono text-xs">{tenant.id}</td>
+                  <td className="px-6 py-4 font-medium text-zinc-200">{tenant.name}</td>
+                  <td className="px-6 py-4">${Number(tenant.budgetUsd).toFixed(2)}</td>
+                  <td className="px-6 py-4">{tenant.keyCount}</td>
+                  <td className="px-6 py-4">{new Date(tenant.createdAt).toLocaleDateString()}</td>
                   <td className="px-6 py-4">
                     <button
-                      onClick={() => handleDelete(t.id)}
+                      onClick={() => handleDelete(tenant.id)}
                       className="text-red-400 hover:text-red-300 font-medium"
                     >
                       Delete
